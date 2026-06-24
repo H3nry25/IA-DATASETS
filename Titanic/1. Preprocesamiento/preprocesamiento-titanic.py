@@ -3,121 +3,131 @@
 @author: IVAN
 """
 
-"""
-En un proyecto típico de análisis de datos, el preprocesamiento de datos generalmente 
-precede al análisis exploratorio de datos (EDA). Sin embargo, en la práctica, 
-estas fases pueden superponerse y retroalimentarse, ya que algunas etapas del EDA
- pueden revelar la necesidad de más preprocesamiento de datos. 
-"""
-
-########## librerías a utilizar ##########
-
-#Se importan la librerías a utilizar
-import numpy as np
+import os
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+########## Configuración de Rutas Absolutas ##########
 
-########## Importando la data ##########
+directorio_actual = os.path.dirname(os.path.abspath(__file__))
+ruta_dataset = os.path.join(directorio_actual, '..', 'dataset')
+ruta_archivo = os.path.join(ruta_dataset, 'titanic.csv')
 
-#Importar los datos de los archivos .csv almacenados
-df_test = pd.read_csv('titanic_test.csv')
-df_train = pd.read_csv('titanic_train.csv')
+########## Importando y Limpiando la data ##########
 
-print(df_test.head())
-print(df_train.head())
+########## Importando y Limpiando la data ##########
 
-# la columna parch se refiere al número de padres/niños (Parents/Children) que viajan con el pasajero.
-# la columna sibsp, que indica el número de hermanos/esposos a bordo con el pasajero.
+titanic_df = pd.read_csv(ruta_archivo, sep=';')
 
-########## Entendimiento de la data ##########
+# 1. Forzamos la columna Age a ser numérica (el '20%' se vuelve nulo)
+titanic_df['Age'] = pd.to_numeric(titanic_df['Age'], errors='coerce')
 
-#Verifica la cantidad de datos que hay en los dataset
-print('Cantidad de datos:')
-print(df_train.shape)
-print(df_test.shape)
+# 2. ¡NUEVO! Limpiamos las edades imposibles (mayores a 100 años las volvemos nulas)
+titanic_df.loc[titanic_df['Age'] > 100, 'Age'] = np.nan
 
-#Verifica el tipo de datos contenida en ambos dataset
-print('Tipos de datos:')
-print(df_train.info())
-print(df_test.info())
+# 3. ¡NUEVO! Filtramos para quedarnos SOLO con las clases de ticket válidas (1, 2 y 3)
+titanic_df = titanic_df[titanic_df['Pclass'].isin([1, 2, 3])]
 
-#Verifica los datos faltantes de los dataset
-print('Datos faltantes:')
-print(pd.isnull(df_train).sum())
-print(pd.isnull(df_test).sum())
+# Ver las primeras filas del conjunto de datos
+print("Primeras filas del dataset:")
+print(titanic_df.head(10))
 
-#Verifica las estadísticas básicas del dataset
-print('Estadísticas del dataset:')
-print(df_train.describe())
-print(df_test.describe())
+# Estadísticas descriptivas
+print("\nEstadísticas descriptivas:")
+print(titanic_df.describe())
 
-########## Preprocesamiento de la data ##########
+# Estadísticas de variables categóricas
+print("\nEstadísticas de variables categóricas:")
+print(titanic_df.describe(include=['object']))
 
-# Transforma los datos de la variable sexo (categórico) en números
-df_train['Sex'].replace(['female','male'],[0,1],inplace=True)
-df_test['Sex'].replace(['female','male'],[0,1],inplace=True)
+########## Visualizaciones ##########
 
-#Transforma los datos de embarque (categórico) en números
-df_train['Embarked'].replace(['Q','S', 'C'],[0,1,2],inplace=True)
-df_test['Embarked'].replace(['Q','S', 'C'],[0,1,2],inplace=True)
+# Histogramas de Edades (frecuencias):
+plt.figure(figsize=(8, 6))
+sns.histplot(titanic_df['Age'].dropna(), bins=30, kde=True)
+plt.xlabel('Edad')
+plt.ylabel('Frecuencia')
+plt.title('Distribución de Edades en el Titanic (Corregido)')
+plt.show()
 
-#Reemplazo los datos faltantes en la edad por la media de esta variable
-print(df_train["Age"].mean())
-print(df_test["Age"].mean())
-promedio = 30
-df_train['Age'] = df_train['Age'].replace(np.nan, promedio)
-df_test['Age'] = df_test['Age'].replace(np.nan, promedio)
+# Crear el diagrama de barras de las clases del target (Survived)
+plt.figure(figsize=(8, 6))
+sns.countplot(data=titanic_df, x='Survived')
+plt.xlabel('Survived')
+plt.ylabel('Count')
+plt.title('Distribución de sobrevivientes')
+plt.xticks([0, 1], ['No', 'Si'])
+plt.show()
 
-#Crea varios grupos/rangos de edades
-#Rangos: 0-8, 9-15, 16-18, 19-25, 26-40, 41-60, 61-100
-bins = [0, 8, 15, 18, 25, 40, 60, 100]
-names = ['1', '2', '3', '4', '5', '6', '7']
-df_train['Age'] = pd.cut(df_train['Age'], bins, labels = names)
-df_test['Age'] = pd.cut(df_test['Age'], bins, labels = names)
+print('\nConteo de valores del target:\n', titanic_df['Survived'].value_counts())
 
-#Se elimina la columna de "Cabin" ya que tiene muchos datos perdidos
-# El parámetro axis=1 indica que se deben eliminar columnas en lugar de filas (axis=0).
-# El parámetro inplace indica si la operación se realiza directamente en el 
-# DataFrame original o devolvuelve una nueva copia con las filas o columnas eliminadas.
-df_train.drop(['Cabin'], axis = 1, inplace=True)
-df_test.drop(['Cabin'], axis = 1, inplace=True)
+# Gráfico de Barras de Supervivencia por Clase:
+plt.figure(figsize=(8, 6))
+sns.countplot(data=titanic_df, x='Pclass', hue='Survived')
+plt.xlabel('Clase')
+plt.ylabel('Cantidad')
+plt.title('Supervivencia por Clase en el Titanic')
+plt.legend(title='Sobreviviente', labels=['No', 'Sí'])
+plt.show()
 
-#Elimina las columnas que se considera que no son necesarias para el analisis
-df_train = df_train.drop(['PassengerId','Name','Ticket'], axis=1)
-df_test = df_test.drop(['Name','Ticket'], axis=1)
+# Gráfico de Torta de Género:
+plt.figure(figsize=(8, 6))
+titanic_df['Sex'].value_counts().plot(kind='pie', autopct='%1.1f%%')
+plt.title('Distribución de Género en el Titanic')
+plt.ylabel('')
+plt.show()
 
-#Se elimina las filas con datos perdidos
-df_train.dropna(axis=0, how='any', inplace=True)
-df_test.dropna(axis=0, how='any', inplace=True)
+########## Análisis de Correlación ##########
 
-#Verifica los datos
-print(pd.isnull(df_train).sum())
-print(pd.isnull(df_test).sum())
+# Seleccionar las variables numéricas principales para el análisis de correlación y el target
+variables_numericas = ['Age', 'SibSp', 'Parch', 'Fare', 'Survived']
 
-print(df_train.shape)
-print(df_test.shape)
+# Crear una submatriz de correlación
+correlation_matrix = titanic_df[variables_numericas].corr()
 
-print(df_test.head())
-print(df_train.head())
+# crea una máscara para ocultar la parte superior de la matriz de correlación
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool), k=1)
 
-# Guardar el DataFrame en un archivo CSV
-# El parámetro index=False evita que los índices del DataFrame
-# se guarden como una columna en el archivo CSV
-df_train.to_csv('train_procesado.csv', index=False, sep=',', encoding='utf-8')
+# Crear un mapa de calor de correlación
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, mask=mask, annot=True, fmt='.2f', cmap='coolwarm', linewidths=.5)
+plt.title('Matriz de Correlación entre Variables Numéricas del Titanic')
+plt.show()
 
+# Aplicar una máscara para mostrar solo correlaciones moderadas/altas mayores a 0.4
+mask_moderadas = np.abs(correlation_matrix) < 0.4
+correlation_matrix[mask_moderadas] = np.nan
 
-# NORMALIZACIÓN
-# Las variables categóricas NO se normalizan; se codifican (One-Hot, Label Encoding, etc.)
-from sklearn.preprocessing import MinMaxScaler
+# Crear un mapa de calor de correlación con valores significativos
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, mask=mask_moderadas, annot=True, fmt='.2f', cmap='coolwarm', linewidths=.5)
+plt.title('Matriz de Correlación (moderadas / altas)')
+plt.show()
 
-# Normalizar solo la columna Fare (la única numérica continua)
-# Se usa fit_transform para el train y transform para test (buena práctica en ML)
-scaler = MinMaxScaler(feature_range=(0,1))
-df_train['Fare_normalized'] = scaler.fit_transform(df_train[['Fare']])
-df_test['Fare_normalized'] = scaler.transform(df_test[['Fare']])
+########## Detección y manejo de Atípicos ##########
 
-# (Opcional) Si deseas eliminar la columna Fare original:
-df_train.drop(columns=['Fare'], inplace=True)
-# df_test.drop(columns=['Fare'], inplace=True)
+# Crear el box-plot de la variable "edad"
+plt.figure(figsize=(10, 6))
+sns.boxplot(x=titanic_df['Age'])
+plt.title('Box-Plot de la Edad')
+plt.xlabel('Edad')
+plt.show()
 
-df_train.to_csv('train_procesado_2.csv', index=False, sep=',', encoding='utf-8')
+# Eliminar valores atípicos (filas)
+Q1 = titanic_df['Age'].quantile(0.25)
+Q3 = titanic_df['Age'].quantile(0.75)
+IQR = Q3 - Q1 # rango intercuartil
+limite_superior = Q3 + 1.5*IQR
+limite_inferior = Q1 - 1.5*IQR
+filtered_titanic_df = titanic_df[(titanic_df['Age'] >= limite_inferior) & (titanic_df['Age'] <= limite_superior)]
+
+# Crear el box-plot de la variable "edad" sin atípicos
+plt.figure(figsize=(10, 6))
+sns.boxplot(x=filtered_titanic_df['Age'])
+plt.title('Box-Plot de la Edad (sin atípicos)')
+plt.xlabel('Edad')
+plt.show()
+
+print("\n¡Análisis Exploratorio terminado con éxito! Revisa las ventanas de los gráficos.")
