@@ -12,7 +12,7 @@ import os
 # Ruta absoluta al directorio donde vive este script
 _DIR = os.path.dirname(os.path.abspath(__file__))
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import classification_report
 from sklearn.ensemble import RandomForestClassifier
@@ -55,13 +55,30 @@ X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
 
-# Crea y entrena el modelo Random Forest
-# n_estimators: número de árboles en el bosque
-# criterion: entropy, gini
+# Crea y entrena el modelo Random Forest usando GridSearchCV
+# GridSearchCV busca automáticamente la mejor combinación de hiperparámetros
+# usando validación cruzada (cv=5) para evitar sobreajuste.
 # class_weight='balanced': compensa el desbalance de clases (hipoglucemia es un evento raro)
-model = RandomForestClassifier(n_estimators=15, max_depth=4, criterion='entropy',
-                               class_weight='balanced', random_state=42)
-model.fit(X_train, y_train)
+param_grid = {
+    'n_estimators': [10, 15, 50, 100],
+    'max_depth': [3, 4, 5, 7],
+    'criterion': ['gini', 'entropy'],
+    'class_weight': ['balanced']
+}
+
+print("--- Ejecutando GridSearchCV (5-fold CV) ---")
+grid_search = GridSearchCV(
+    RandomForestClassifier(random_state=42),
+    param_grid,
+    cv=5,
+    scoring='accuracy',
+    n_jobs=-1
+)
+grid_search.fit(X_train, y_train)
+
+model = grid_search.best_estimator_
+print(f"Mejores hiperparámetros encontrados: {grid_search.best_params_}")
+print(f"Mejor score en validación cruzada: {grid_search.best_score_:.4f}\n")
 
 # Realiza predicciones usando el conjunto de prueba
 y_pred = model.predict(X_test)

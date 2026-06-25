@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 Comparativa de todos los algoritmos de ML para los 3 datasets:
-  - Cáncer de Mama (Cancer de Mama)
+  - Cancer de Mama
   - Diabetes
   - Titanic
 
 Algoritmos evaluados por dataset:
-  1. Regresión Logística
+  1. Regresion Logistica
   2. K-NN
-  3. Decision Tree
+  3. Arbol de Decision
   4. Random Forest
 
+Usa GridSearchCV para optimizar hiperparametros.
 Genera: comparativa_algoritmos.xlsx
 """
 
@@ -20,103 +21,145 @@ import numpy as np
 import pandas as pd
 
 from sklearn.datasets import load_breast_cancer
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (accuracy_score, recall_score, precision_score,
-                             f1_score, roc_auc_score, r2_score)
+                             f1_score, roc_auc_score)
 from openpyxl import Workbook
-from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side,
-                              GradientFill)
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.chart import BarChart, RadarChart, Reference
+from openpyxl.chart.series import SeriesLabel
 
 warnings.filterwarnings('ignore')
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
 # =============================================================================
-# HELPER — calcula todas las métricas de un resultado
+# COLUMNAS DEL EXCEL (mismas que en la imagen del ingeniero)
+# =============================================================================
+METRICAS = ['Accuracy', 'Precision', 'Recall (Sensibilidad)', 'Specificity', 'F1-Score', 'AUC']
+ALG_NOMBRES = ['KNN', 'Arbol de Decision', 'Random Forest', 'Regresion Logistica']
+
+# =============================================================================
+# HELPER - calcula todas las metricas
 # =============================================================================
 def calcular_metricas(y_test, y_pred, y_pred_proba=None):
     metricas = {}
-    metricas['Accuracy']    = round(accuracy_score(y_test, y_pred), 4)
-    metricas['Recall']      = round(recall_score(y_test, y_pred, zero_division=0), 4)
-    metricas['Precision']   = round(precision_score(y_test, y_pred, zero_division=0), 4)
-    metricas['Specificity'] = round(recall_score(y_test, y_pred, pos_label=0, zero_division=0), 4)
-    metricas['F1 Score']    = round(f1_score(y_test, y_pred, zero_division=0), 4)
-    metricas['R2']          = round(r2_score(y_test, y_pred), 4)
+    metricas['Accuracy']                = round(accuracy_score(y_test, y_pred), 8)
+    metricas['Precision']               = round(precision_score(y_test, y_pred, zero_division=0), 8)
+    metricas['Recall (Sensibilidad)']   = round(recall_score(y_test, y_pred, zero_division=0), 8)
+    metricas['Specificity']             = round(recall_score(y_test, y_pred, pos_label=0, zero_division=0), 8)
+    metricas['F1-Score']                = round(f1_score(y_test, y_pred, zero_division=0), 8)
     try:
         proba = y_pred_proba if y_pred_proba is not None else y_pred
-        metricas['AUC'] = round(roc_auc_score(y_test, proba), 4)
+        metricas['AUC'] = round(roc_auc_score(y_test, proba), 8)
     except ValueError:
-        metricas['AUC'] = 'N/A'
+        metricas['AUC'] = 0.0
     return metricas
 
-resultados = []   # lista de dicts con todos los resultados
+# =============================================================================
+# GRIDS DE HIPERPARAMETROS PARA GridSearchCV
+# =============================================================================
+GRID_LR = {
+    'C': [0.01, 0.1, 1, 10],
+    'solver': ['lbfgs', 'saga'],
+    'max_iter': [500, 1000]
+}
+
+GRID_KNN = {
+    'n_neighbors': [3, 5, 7, 9],
+    'weights': ['uniform', 'distance'],
+    'p': [1, 2]
+}
+
+GRID_DT = {
+    'max_depth': [3, 5, 7, 10],
+    'criterion': ['gini', 'entropy']
+}
+
+GRID_RF = {
+    'n_estimators': [10, 15, 50, 100],
+    'max_depth': [3, 4, 5, 7],
+    'criterion': ['gini', 'entropy']
+}
+
+def entrenar_con_grid(model, param_grid, X_train, y_train, cv=5):
+    """Entrena un modelo usando GridSearchCV y retorna el mejor modelo."""
+    grid = GridSearchCV(model, param_grid, cv=cv, scoring='accuracy', n_jobs=-1)
+    grid.fit(X_train, y_train)
+    print(f"    Mejores parametros: {grid.best_params_}")
+    print(f"    Mejor score CV:     {grid.best_score_:.4f}")
+    return grid.best_estimator_
+
+def evaluar_modelo(nombre_alg, model, X_test, y_test):
+    """Predice y calcula metricas para un modelo entrenado."""
+    y_pred = model.predict(X_test)
+    try:
+        y_proba = model.predict_proba(X_test)[:, 1]
+    except AttributeError:
+        y_proba = None
+    return {
+        'Algoritmo': nombre_alg,
+        **calcular_metricas(y_test, y_pred, y_proba)
+    }
 
 # =============================================================================
-# 1. CÁNCER DE MAMA
+# Almacen de resultados por dataset
+# =============================================================================
+resultados_por_dataset = {}
+
+# =============================================================================
+# 1. CANCER DE MAMA
 # =============================================================================
 print("=" * 60)
-print("PROCESANDO: Cáncer de Mama")
+print("PROCESANDO: Cancer de Mama (con GridSearchCV)")
 print("=" * 60)
 
-dataset = load_breast_cancer()
-X_cm = dataset.data
-y_cm = 1 - dataset.target   # 1=maligno (positivo), 0=benigno
+dataset_cm = load_breast_cancer()
+X_cm = dataset_cm.data
+y_cm = 1 - dataset_cm.target  # 1=maligno, 0=benigno
 
 X_train_cm, X_test_cm, y_train_cm, y_test_cm = train_test_split(
     X_cm, y_cm, test_size=0.2, random_state=42, stratify=y_cm)
 
 scaler_cm = MinMaxScaler(feature_range=(0, 1))
 X_train_cm_s = scaler_cm.fit_transform(X_train_cm)
-X_test_cm_s  = scaler_cm.transform(X_test_cm)
+X_test_cm_s = scaler_cm.transform(X_test_cm)
 
-# --- 1.1 Regresión Logística ---
-print("  > Regresión Logística...")
-m = LogisticRegression(solver='saga', max_iter=500)
-m.fit(X_train_cm_s, y_train_cm)
-yp = (m.predict(X_test_cm_s) > 0.5).astype(int)
-yp_proba = m.predict_proba(X_test_cm_s)[:, 1]
-resultados.append({'Dataset': 'Cáncer de Mama', 'Algoritmo': 'Regresión Logística',
-                   **calcular_metricas(y_test_cm, yp, yp_proba)})
+res_cm = []
 
-# --- 1.2 K-NN ---
-print("  > K-NN...")
-m = KNeighborsClassifier(n_neighbors=3, p=2, weights='uniform')
-m.fit(X_train_cm_s, y_train_cm)
-yp = m.predict(X_test_cm_s)
-yp_proba = m.predict_proba(X_test_cm_s)[:, 1]
-resultados.append({'Dataset': 'Cáncer de Mama', 'Algoritmo': 'K-NN',
-                   **calcular_metricas(y_test_cm, yp, yp_proba)})
+# 1.1 KNN
+print("  > KNN...")
+m = entrenar_con_grid(KNeighborsClassifier(), GRID_KNN, X_train_cm_s, y_train_cm)
+res_cm.append(evaluar_modelo('KNN', m, X_test_cm_s, y_test_cm))
 
-# --- 1.3 Decision Tree ---
-print("  > Decision Tree...")
-m = DecisionTreeClassifier(max_depth=7, criterion='gini', random_state=42)
-m.fit(X_train_cm_s, y_train_cm)
-yp = (m.predict(X_test_cm_s) > 0.5).astype(int)
-yp_proba = m.predict_proba(X_test_cm_s)[:, 1]
-resultados.append({'Dataset': 'Cáncer de Mama', 'Algoritmo': 'Decision Tree',
-                   **calcular_metricas(y_test_cm, yp, yp_proba)})
+# 1.2 Arbol de Decision
+print("  > Arbol de Decision...")
+m = entrenar_con_grid(DecisionTreeClassifier(random_state=42), GRID_DT, X_train_cm_s, y_train_cm)
+res_cm.append(evaluar_modelo('Arbol de Decision', m, X_test_cm_s, y_test_cm))
 
-# --- 1.4 Random Forest ---
+# 1.3 Random Forest
 print("  > Random Forest...")
-m = RandomForestClassifier(n_estimators=15, max_depth=4, criterion='entropy', random_state=42)
-m.fit(X_train_cm_s, y_train_cm)
-yp = (m.predict(X_test_cm_s) > 0.5).astype(int)
-yp_proba = m.predict_proba(X_test_cm_s)[:, 1]
-resultados.append({'Dataset': 'Cáncer de Mama', 'Algoritmo': 'Random Forest',
-                   **calcular_metricas(y_test_cm, yp, yp_proba)})
+m = entrenar_con_grid(RandomForestClassifier(random_state=42), GRID_RF, X_train_cm_s, y_train_cm)
+res_cm.append(evaluar_modelo('Random Forest', m, X_test_cm_s, y_test_cm))
+
+# 1.4 Regresion Logistica
+print("  > Regresion Logistica...")
+m = entrenar_con_grid(LogisticRegression(), GRID_LR, X_train_cm_s, y_train_cm)
+res_cm.append(evaluar_modelo('Regresion Logistica', m, X_test_cm_s, y_test_cm))
+
+resultados_por_dataset['Cancer de Mama'] = res_cm
 
 # =============================================================================
 # 2. DIABETES
 # =============================================================================
 print("\n" + "=" * 60)
-print("PROCESANDO: Diabetes")
+print("PROCESANDO: Diabetes (con GridSearchCV)")
 print("=" * 60)
 
 csv_diabetes = os.path.normpath(
@@ -132,58 +175,42 @@ try:
 
     scaler_d = MinMaxScaler(feature_range=(0, 1))
     X_train_d_s = scaler_d.fit_transform(X_train_d)
-    X_test_d_s  = scaler_d.transform(X_test_d)
+    X_test_d_s = scaler_d.transform(X_test_d)
 
-    # --- 2.1 Regresión Logística ---
-    print("  > Regresión Logística...")
-    m = LogisticRegression(class_weight='balanced', solver='saga', max_iter=1000)
-    m.fit(X_train_d_s, y_train_d)
-    yp = (m.predict(X_test_d_s) > 0.5).astype(int)
-    yp_proba = m.predict_proba(X_test_d_s)[:, 1]
-    resultados.append({'Dataset': 'Diabetes', 'Algoritmo': 'Regresión Logística',
-                       **calcular_metricas(y_test_d, yp, yp_proba)})
+    res_d = []
 
-    # --- 2.2 K-NN ---
-    print("  > K-NN...")
-    m = KNeighborsClassifier(n_neighbors=3, p=2, weights='uniform')
-    m.fit(X_train_d_s, y_train_d)
-    yp = m.predict(X_test_d_s)
-    yp_proba = m.predict_proba(X_test_d_s)[:, 1]
-    resultados.append({'Dataset': 'Diabetes', 'Algoritmo': 'K-NN',
-                       **calcular_metricas(y_test_d, yp, yp_proba)})
+    # Grids con class_weight balanced para diabetes (desbalanceado)
+    GRID_LR_BAL = {**GRID_LR, 'class_weight': ['balanced']}
+    GRID_DT_BAL = {**GRID_DT, 'class_weight': ['balanced']}
+    GRID_RF_BAL = {**GRID_RF, 'class_weight': ['balanced']}
 
-    # --- 2.3 Decision Tree ---
-    print("  > Decision Tree...")
-    m = DecisionTreeClassifier(max_depth=7, criterion='gini', class_weight='balanced', random_state=42)
-    m.fit(X_train_d_s, y_train_d)
-    yp = (m.predict(X_test_d_s) > 0.5).astype(int)
-    yp_proba = m.predict_proba(X_test_d_s)[:, 1]
-    resultados.append({'Dataset': 'Diabetes', 'Algoritmo': 'Decision Tree',
-                       **calcular_metricas(y_test_d, yp, yp_proba)})
+    print("  > KNN...")
+    m = entrenar_con_grid(KNeighborsClassifier(), GRID_KNN, X_train_d_s, y_train_d)
+    res_d.append(evaluar_modelo('KNN', m, X_test_d_s, y_test_d))
 
-    # --- 2.4 Random Forest ---
+    print("  > Arbol de Decision...")
+    m = entrenar_con_grid(DecisionTreeClassifier(random_state=42), GRID_DT_BAL, X_train_d_s, y_train_d)
+    res_d.append(evaluar_modelo('Arbol de Decision', m, X_test_d_s, y_test_d))
+
     print("  > Random Forest...")
-    m = RandomForestClassifier(n_estimators=15, max_depth=4, criterion='entropy',
-                               class_weight='balanced', random_state=42)
-    m.fit(X_train_d_s, y_train_d)
-    yp = (m.predict(X_test_d_s) > 0.5).astype(int)
-    yp_proba = m.predict_proba(X_test_d_s)[:, 1]
-    resultados.append({'Dataset': 'Diabetes', 'Algoritmo': 'Random Forest',
-                       **calcular_metricas(y_test_d, yp, yp_proba)})
+    m = entrenar_con_grid(RandomForestClassifier(random_state=42), GRID_RF_BAL, X_train_d_s, y_train_d)
+    res_d.append(evaluar_modelo('Random Forest', m, X_test_d_s, y_test_d))
+
+    print("  > Regresion Logistica...")
+    m = entrenar_con_grid(LogisticRegression(), GRID_LR_BAL, X_train_d_s, y_train_d)
+    res_d.append(evaluar_modelo('Regresion Logistica', m, X_test_d_s, y_test_d))
+
+    resultados_por_dataset['Diabetes'] = res_d
 
 except FileNotFoundError:
-    print(f"  [!] No se encontró el CSV de Diabetes: {csv_diabetes}")
-    print("      Ejecuta 'preprocess_data.py' del dataset Diabetes primero.")
-    for alg in ['Regresión Logística', 'K-NN', 'Decision Tree', 'Random Forest']:
-        resultados.append({'Dataset': 'Diabetes', 'Algoritmo': alg,
-                           'Accuracy': 'N/A', 'Recall': 'N/A', 'Precision': 'N/A',
-                           'Specificity': 'N/A', 'F1 Score': 'N/A', 'AUC': 'N/A', 'R2': 'N/A'})
+    print(f"  [!] No se encontro: {csv_diabetes}")
+    resultados_por_dataset['Diabetes'] = []
 
 # =============================================================================
 # 3. TITANIC
 # =============================================================================
 print("\n" + "=" * 60)
-print("PROCESANDO: Titanic")
+print("PROCESANDO: Titanic (con GridSearchCV)")
 print("=" * 60)
 
 csv_titanic = os.path.normpath(
@@ -197,305 +224,240 @@ try:
     X_train_t, X_test_t, y_train_t, y_test_t = train_test_split(
         X_tit, y_tit, test_size=0.2, random_state=42, stratify=y_tit)
 
-    # --- 3.1 Regresión Logística ---
-    print("  > Regresión Logística...")
-    m = LogisticRegression(class_weight='balanced', solver='saga', max_iter=1000)
-    m.fit(X_train_t, y_train_t)
-    yp = m.predict(X_test_t)
-    yp_proba = m.predict_proba(X_test_t)[:, 1]
-    resultados.append({'Dataset': 'Titanic', 'Algoritmo': 'Regresión Logística',
-                       **calcular_metricas(y_test_t, yp, yp_proba)})
+    res_t = []
 
-    # --- 3.2 K-NN ---
-    print("  > K-NN...")
-    m = KNeighborsClassifier(n_neighbors=3, p=2, weights='uniform')
-    m.fit(X_train_t, y_train_t)
-    yp = m.predict(X_test_t)
-    yp_proba = m.predict_proba(X_test_t)[:, 1]
-    resultados.append({'Dataset': 'Titanic', 'Algoritmo': 'K-NN',
-                       **calcular_metricas(y_test_t, yp, yp_proba)})
+    print("  > KNN...")
+    m = entrenar_con_grid(KNeighborsClassifier(), GRID_KNN, X_train_t, y_train_t)
+    res_t.append(evaluar_modelo('KNN', m, X_test_t, y_test_t))
 
-    # --- 3.3 Decision Tree ---
-    print("  > Decision Tree...")
-    m = DecisionTreeClassifier(max_depth=4, criterion='gini', random_state=42)
-    m.fit(X_train_t, y_train_t)
-    yp = m.predict(X_test_t)
-    yp_proba = m.predict_proba(X_test_t)[:, 1]
-    resultados.append({'Dataset': 'Titanic', 'Algoritmo': 'Decision Tree',
-                       **calcular_metricas(y_test_t, yp, yp_proba)})
+    print("  > Arbol de Decision...")
+    m = entrenar_con_grid(DecisionTreeClassifier(random_state=42), GRID_DT, X_train_t, y_train_t)
+    res_t.append(evaluar_modelo('Arbol de Decision', m, X_test_t, y_test_t))
 
-    # --- 3.4 Random Forest ---
     print("  > Random Forest...")
-    m = RandomForestClassifier(n_estimators=15, max_depth=4, criterion='entropy', random_state=42)
-    m.fit(X_train_t, y_train_t)
-    yp = m.predict(X_test_t)
-    yp_proba = m.predict_proba(X_test_t)[:, 1]
-    resultados.append({'Dataset': 'Titanic', 'Algoritmo': 'Random Forest',
-                       **calcular_metricas(y_test_t, yp, yp_proba)})
+    m = entrenar_con_grid(RandomForestClassifier(random_state=42), GRID_RF, X_train_t, y_train_t)
+    res_t.append(evaluar_modelo('Random Forest', m, X_test_t, y_test_t))
+
+    print("  > Regresion Logistica...")
+    m = entrenar_con_grid(LogisticRegression(), {**GRID_LR, 'class_weight': ['balanced']}, X_train_t, y_train_t)
+    res_t.append(evaluar_modelo('Regresion Logistica', m, X_test_t, y_test_t))
+
+    resultados_por_dataset['Titanic'] = res_t
 
 except FileNotFoundError:
-    print(f"  [!] No se encontró el CSV de Titanic: {csv_titanic}")
-    for alg in ['Regresión Logística', 'K-NN', 'Decision Tree', 'Random Forest']:
-        resultados.append({'Dataset': 'Titanic', 'Algoritmo': alg,
-                           'Accuracy': 'N/A', 'Recall': 'N/A', 'Precision': 'N/A',
-                           'Specificity': 'N/A', 'F1 Score': 'N/A', 'AUC': 'N/A', 'R2': 'N/A'})
+    print(f"  [!] No se encontro: {csv_titanic}")
+    resultados_por_dataset['Titanic'] = []
 
 # =============================================================================
-# GENERAR EXCEL FORMATEADO
+# GENERAR EXCEL CON FORMATO COMO LA IMAGEN DEL INGENIERO
 # =============================================================================
 print("\n" + "=" * 60)
 print("GENERANDO ARCHIVO EXCEL...")
 print("=" * 60)
 
-df_resultados = pd.DataFrame(resultados)
-METRICAS = ['Accuracy', 'Recall', 'Precision', 'Specificity', 'F1 Score', 'AUC', 'R2']
+wb = Workbook()
+# Borrar hoja por defecto
+wb.remove(wb.active)
 
-# --- Colores de encabezado por dataset ---
-COLORES_DATASET = {
-    'Cáncer de Mama': {'header': '1565C0', 'sub': 'BBDEFB', 'alt': 'E3F2FD'},
-    'Diabetes':       {'header': '2E7D32', 'sub': 'C8E6C9', 'alt': 'E8F5E9'},
-    'Titanic':        {'header': '6A1B9A', 'sub': 'E1BEE7', 'alt': 'F3E5F5'},
+# Estilos
+thin = Side(style='thin', color='000000')
+border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+# Colores de encabezado por dataset (similar a la imagen: fondo oscuro, texto claro)
+DATASET_STYLES = {
+    'Cancer de Mama': {'header_fill': PatternFill('solid', fgColor='4A0E4E'),
+                       'header_font': Font(bold=True, size=11, color='FFFFFF', name='Calibri'),
+                       'row_fills': [PatternFill('solid', fgColor='E8D5E8'),
+                                     PatternFill('solid', fgColor='F5EDF5')]},
+    'Diabetes':       {'header_fill': PatternFill('solid', fgColor='1B5E20'),
+                       'header_font': Font(bold=True, size=11, color='FFFFFF', name='Calibri'),
+                       'row_fills': [PatternFill('solid', fgColor='C8E6C9'),
+                                     PatternFill('solid', fgColor='E8F5E9')]},
+    'Titanic':        {'header_fill': PatternFill('solid', fgColor='0D47A1'),
+                       'header_font': Font(bold=True, size=11, color='FFFFFF', name='Calibri'),
+                       'row_fills': [PatternFill('solid', fgColor='BBDEFB'),
+                                     PatternFill('solid', fgColor='E3F2FD')]},
 }
 
-COLOR_HEADER_MAIN = '263238'   # gris oscuro para la fila de títulos principales
-COLOR_WHITE       = 'FFFFFF'
-COLOR_METRIC_HDR  = '37474F'
+for ds_name, res_list in resultados_por_dataset.items():
+    if not res_list:
+        continue
 
-wb = Workbook()
+    ws = wb.create_sheet(title=ds_name[:31])  # max 31 chars for sheet name
+    styles = DATASET_STYLES.get(ds_name, DATASET_STYLES['Cancer de Mama'])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HOJA 1: Comparativa Completa
-# ─────────────────────────────────────────────────────────────────────────────
-ws = wb.active
-ws.title = 'Comparativa Completa'
+    # --- Encabezados ---
+    headers = ['Algoritmo'] + METRICAS
+    col_widths = [20, 14, 14, 22, 14, 14, 14]
 
-# Bordes
-thin = Side(style='thin', color='B0BEC5')
-thick = Side(style='medium', color='263238')
-border_thin  = Border(left=thin,  right=thin,  top=thin,  bottom=thin)
-border_thick = Border(left=thick, right=thick, top=thick, bottom=thick)
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.fill = styles['header_fill']
+        cell.font = styles['header_font']
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border_all
+        ws.column_dimensions[get_column_letter(col_idx)].width = col_widths[col_idx - 1]
 
-def apply_border(cell, border):
-    cell.border = border
+    ws.row_dimensions[1].height = 25
 
-# Título principal
-ws.merge_cells('A1:I1')
-title_cell = ws['A1']
-title_cell.value = 'Comparativa de Algoritmos de Machine Learning — 3 Datasets'
-title_cell.font = Font(bold=True, size=14, color=COLOR_WHITE, name='Calibri')
-title_cell.fill = PatternFill('solid', fgColor=COLOR_HEADER_MAIN)
-title_cell.alignment = Alignment(horizontal='center', vertical='center')
-ws.row_dimensions[1].height = 30
+    # Activar autofiltro (flechitas como en la imagen)
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
 
-# Subtítulo
-ws.merge_cells('A2:I2')
-sub_cell = ws['A2']
-sub_cell.value = 'División: 80% entrenamiento / 20% prueba  |  random_state=42  |  Estratificado'
-sub_cell.font = Font(italic=True, size=10, color='546E7A', name='Calibri')
-sub_cell.fill = PatternFill('solid', fgColor='ECEFF1')
-sub_cell.alignment = Alignment(horizontal='center', vertical='center')
-ws.row_dimensions[2].height = 18
+    # --- Datos ---
+    for i, res in enumerate(res_list):
+        row = i + 2
+        bg = styles['row_fills'][i % 2]
 
-# Encabezados de columna
-headers = ['Dataset', 'Algoritmo'] + METRICAS
-ws.row_dimensions[3].height = 22
-for col_idx, h in enumerate(headers, start=1):
-    cell = ws.cell(row=3, column=col_idx, value=h)
-    cell.font = Font(bold=True, size=11, color=COLOR_WHITE, name='Calibri')
-    cell.fill = PatternFill('solid', fgColor=COLOR_METRIC_HDR)
-    cell.alignment = Alignment(horizontal='center', vertical='center')
-    cell.border = border_thin
-
-# Anchos de columna
-col_widths = [20, 22, 11, 11, 11, 13, 11, 11, 11]
-for i, w in enumerate(col_widths, start=1):
-    ws.column_dimensions[get_column_letter(i)].width = w
-
-# Datos
-ROW_START = 4
-datasets_orden = ['Cáncer de Mama', 'Diabetes', 'Titanic']
-fila = ROW_START
-
-for ds in datasets_orden:
-    df_ds = df_resultados[df_resultados['Dataset'] == ds]
-    colores = COLORES_DATASET[ds]
-    algoritmos = df_ds['Algoritmo'].tolist()
-
-    # Fusionar celda de Dataset
-    row_ini = fila
-    row_fin = fila + len(algoritmos) - 1
-    ws.merge_cells(f'A{row_ini}:A{row_fin}')
-    ds_cell = ws[f'A{row_ini}']
-    ds_cell.value = ds
-    ds_cell.font = Font(bold=True, size=11, color=COLOR_WHITE, name='Calibri')
-    ds_cell.fill = PatternFill('solid', fgColor=colores['header'])
-    ds_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    ds_cell.border = border_thick
-
-    for i, row_data in enumerate(df_ds.itertuples(index=False)):
-        bg = colores['sub'] if i % 2 == 0 else colores['alt']
-
-        # Columna Algoritmo
-        cell = ws.cell(row=fila, column=2, value=row_data.Algoritmo)
-        cell.font = Font(bold=True, size=10, name='Calibri', color='212121')
-        cell.fill = PatternFill('solid', fgColor=bg)
+        # Algoritmo
+        cell = ws.cell(row=row, column=1, value=res['Algoritmo'])
+        cell.font = Font(bold=True, size=10, name='Calibri')
+        cell.fill = bg
         cell.alignment = Alignment(horizontal='left', vertical='center', indent=1)
-        cell.border = border_thin
+        cell.border = border_all
 
-        # Métricas numéricas
-        for col_idx, metrica in enumerate(METRICAS, start=3):
-            val = row_data._asdict().get(metrica)
-            cell = ws.cell(row=fila, column=col_idx, value=val)
+        # Metricas
+        for col_idx, metrica in enumerate(METRICAS, start=2):
+            val = res.get(metrica, 0.0)
+            cell = ws.cell(row=row, column=col_idx, value=val)
             cell.font = Font(size=10, name='Calibri')
-            cell.fill = PatternFill('solid', fgColor=bg)
+            cell.fill = bg
             cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = border_thin
+            cell.border = border_all
             if isinstance(val, float):
-                cell.number_format = '0.0000'
+                cell.number_format = '0.00000000'
 
-        ws.row_dimensions[fila].height = 18
+        ws.row_dimensions[row].height = 20
+
+    num_rows_data = len(res_list)
+    data_end_row = 1 + num_rows_data  # row 1 is header, data starts at row 2
+
+    # --- GRAFICO DE BARRAS (como en la imagen) ---
+    chart_bar = BarChart()
+    chart_bar.type = "col"
+    chart_bar.grouping = "clustered"
+    chart_bar.title = "Comparacion"
+    chart_bar.y_axis.title = None
+    chart_bar.x_axis.title = None
+    chart_bar.style = 10
+    chart_bar.width = 22
+    chart_bar.height = 14
+
+    # Categorias = metricas (eje X)
+    cats = Reference(ws, min_col=2, max_col=len(headers), min_row=1, max_row=1)
+    chart_bar.set_categories(cats)
+
+    # Colores para las barras de cada algoritmo
+    bar_colors = ['1F4E79', 'C00000', '375623', '000000']
+    for i in range(num_rows_data):
+        values = Reference(ws, min_col=2, max_col=len(headers),
+                          min_row=i + 2, max_row=i + 2)
+        chart_bar.add_data(values, titles_from_data=False)
+        chart_bar.series[i].title = SeriesLabel(v=res_list[i]['Algoritmo'])
+        chart_bar.series[i].graphicalProperties.solidFill = bar_colors[i % len(bar_colors)]
+
+    chart_bar.legend.position = 'b'
+    ws.add_chart(chart_bar, f"A{data_end_row + 2}")
+
+    # --- GRAFICO DE RADAR (como en la imagen) ---
+    chart_radar = RadarChart()
+    chart_radar.type = "marker"
+    chart_radar.title = "Comparacion"
+    chart_radar.style = 26
+    chart_radar.width = 16
+    chart_radar.height = 14
+
+    cats_radar = Reference(ws, min_col=2, max_col=len(headers), min_row=1, max_row=1)
+    chart_radar.set_categories(cats_radar)
+
+    radar_colors = ['1F4E79', 'C00000', '375623', '7030A0']
+    for i in range(num_rows_data):
+        values = Reference(ws, min_col=2, max_col=len(headers),
+                          min_row=i + 2, max_row=i + 2)
+        chart_radar.add_data(values, titles_from_data=False)
+        chart_radar.series[i].title = SeriesLabel(v=res_list[i]['Algoritmo'])
+
+    chart_radar.legend.position = 'r'
+    # Posicionar el radar a la derecha del bar chart
+    ws.add_chart(chart_radar, f"I{data_end_row + 2}")
+
+# =============================================================================
+# HOJA RESUMEN GENERAL (todos los datasets juntos)
+# =============================================================================
+ws_resumen = wb.create_sheet(title='Resumen General')
+
+# Titulo
+ws_resumen.merge_cells('A1:H1')
+c = ws_resumen['A1']
+c.value = 'Comparativa General - Todos los Datasets (con GridSearchCV)'
+c.font = Font(bold=True, size=14, color='FFFFFF', name='Calibri')
+c.fill = PatternFill('solid', fgColor='263238')
+c.alignment = Alignment(horizontal='center', vertical='center')
+ws_resumen.row_dimensions[1].height = 28
+
+# Encabezados
+headers_res = ['Dataset', 'Algoritmo'] + METRICAS
+col_widths_res = [18, 20, 14, 14, 22, 14, 14, 14]
+for col_idx, h in enumerate(headers_res, start=1):
+    cell = ws_resumen.cell(row=2, column=col_idx, value=h)
+    cell.fill = PatternFill('solid', fgColor='37474F')
+    cell.font = Font(bold=True, size=11, color='FFFFFF', name='Calibri')
+    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    cell.border = border_all
+    ws_resumen.column_dimensions[get_column_letter(col_idx)].width = col_widths_res[col_idx - 1]
+
+ws_resumen.row_dimensions[2].height = 25
+
+fila = 3
+ds_colors = {
+    'Cancer de Mama': ['E8D5E8', 'F5EDF5'],
+    'Diabetes':       ['C8E6C9', 'E8F5E9'],
+    'Titanic':        ['BBDEFB', 'E3F2FD'],
+}
+
+for ds_name, res_list in resultados_por_dataset.items():
+    colors = ds_colors.get(ds_name, ['FFFFFF', 'F5F5F5'])
+    for i, res in enumerate(res_list):
+        bg = PatternFill('solid', fgColor=colors[i % 2])
+
+        # Dataset
+        cell = ws_resumen.cell(row=fila, column=1, value=ds_name)
+        cell.font = Font(bold=True, size=10, name='Calibri')
+        cell.fill = bg
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border_all
+
+        # Algoritmo
+        cell = ws_resumen.cell(row=fila, column=2, value=res['Algoritmo'])
+        cell.font = Font(bold=True, size=10, name='Calibri')
+        cell.fill = bg
+        cell.alignment = Alignment(horizontal='left', vertical='center', indent=1)
+        cell.border = border_all
+
+        # Metricas
+        for col_idx, metrica in enumerate(METRICAS, start=3):
+            val = res.get(metrica, 0.0)
+            cell = ws_resumen.cell(row=fila, column=col_idx, value=val)
+            cell.font = Font(size=10, name='Calibri')
+            cell.fill = bg
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border_all
+            if isinstance(val, float):
+                cell.number_format = '0.00000000'
+
+        ws_resumen.row_dimensions[fila].height = 18
         fila += 1
 
-# Formato condicional (escala de color) para cada columna de métrica
-for col_idx, metrica in enumerate(METRICAS, start=3):
-    col_letter = get_column_letter(col_idx)
-    rango = f'{col_letter}{ROW_START}:{col_letter}{fila-1}'
-    # Verde = mejor, Rojo = peor (excepto R2 que puede ser negativo)
-    ws.conditional_formatting.add(rango, ColorScaleRule(
-        start_type='min', start_color='FF6B6B',
-        mid_type='percentile', mid_value=50, mid_color='FFEB3B',
-        end_type='max', end_color='66BB6A'))
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HOJA 2: Resumen por Algoritmo (Promedio entre datasets)
-# ─────────────────────────────────────────────────────────────────────────────
-ws2 = wb.create_sheet('Resumen por Algoritmo')
-
-ws2.merge_cells('A1:I1')
-c = ws2['A1']
-c.value = 'Promedio de Métricas por Algoritmo (entre los 3 datasets)'
-c.font = Font(bold=True, size=13, color=COLOR_WHITE, name='Calibri')
-c.fill = PatternFill('solid', fgColor='4A148C')
-c.alignment = Alignment(horizontal='center', vertical='center')
-ws2.row_dimensions[1].height = 28
-
-headers2 = ['Algoritmo'] + METRICAS
-for col_idx, h in enumerate(headers2, start=1):
-    cell = ws2.cell(row=2, column=col_idx, value=h)
-    cell.font = Font(bold=True, size=11, color=COLOR_WHITE, name='Calibri')
-    cell.fill = PatternFill('solid', fgColor='6A1B9A')
-    cell.alignment = Alignment(horizontal='center', vertical='center')
-    cell.border = border_thin
-ws2.row_dimensions[2].height = 20
-
-df_num = df_resultados.copy()
-for m in METRICAS:
-    df_num[m] = pd.to_numeric(df_num[m], errors='coerce')
-
-resumen = df_num.groupby('Algoritmo')[METRICAS].mean().round(4).reset_index()
-ALG_COLORS = {
-    'Regresión Logística': 'E8EAF6',
-    'K-NN':                'FCE4EC',
-    'Decision Tree':       'E8F5E9',
-    'Random Forest':       'FFF8E1',
-}
-for i, row in resumen.iterrows():
-    bg = ALG_COLORS.get(row['Algoritmo'], 'FFFFFF')
-    for col_idx, col in enumerate(headers2, start=1):
-        val = row[col]
-        cell = ws2.cell(row=i+3, column=col_idx, value=val)
-        cell.fill = PatternFill('solid', fgColor=bg)
-        cell.border = border_thin
-        cell.font = Font(size=10, name='Calibri',
-                         bold=(col == 'Algoritmo'))
-        cell.alignment = Alignment(horizontal='center' if col != 'Algoritmo' else 'left',
-                                   vertical='center', indent=(1 if col == 'Algoritmo' else 0))
-        if isinstance(val, float):
-            cell.number_format = '0.0000'
-    ws2.row_dimensions[i+3].height = 18
-
-col_widths2 = [22] + [11]*7
-for i, w in enumerate(col_widths2, start=1):
-    ws2.column_dimensions[get_column_letter(i)].width = w
-
-# Formato condicional hoja 2
-for col_idx, metrica in enumerate(METRICAS, start=2):
-    col_letter = get_column_letter(col_idx)
-    rango = f'{col_letter}3:{col_letter}{3+len(resumen)-1}'
-    ws2.conditional_formatting.add(rango, ColorScaleRule(
-        start_type='min', start_color='FF6B6B',
-        mid_type='percentile', mid_value=50, mid_color='FFEB3B',
-        end_type='max', end_color='66BB6A'))
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HOJA 3: Resumen por Dataset
-# ─────────────────────────────────────────────────────────────────────────────
-ws3 = wb.create_sheet('Resumen por Dataset')
-
-ws3.merge_cells('A1:I1')
-c = ws3['A1']
-c.value = 'Mejor Algoritmo por Dataset (según Accuracy)'
-c.font = Font(bold=True, size=13, color=COLOR_WHITE, name='Calibri')
-c.fill = PatternFill('solid', fgColor=COLOR_HEADER_MAIN)
-c.alignment = Alignment(horizontal='center', vertical='center')
-ws3.row_dimensions[1].height = 28
-
-headers3 = ['Dataset', 'Mejor Algoritmo'] + METRICAS
-for col_idx, h in enumerate(headers3, start=1):
-    cell = ws3.cell(row=2, column=col_idx, value=h)
-    cell.font = Font(bold=True, size=11, color=COLOR_WHITE, name='Calibri')
-    cell.fill = PatternFill('solid', fgColor=COLOR_METRIC_HDR)
-    cell.alignment = Alignment(horizontal='center', vertical='center')
-    cell.border = border_thin
-ws3.row_dimensions[2].height = 20
-
-for i, ds in enumerate(datasets_orden):
-    colores = COLORES_DATASET[ds]
-    df_ds_num = df_num[df_num['Dataset'] == ds].copy()
-    if df_ds_num['Accuracy'].notna().any():
-        best_idx = df_ds_num['Accuracy'].idxmax()
-        best_row = df_ds_num.loc[best_idx]
-    else:
-        best_row = df_ds_num.iloc[0]
-
-    row_excel = i + 3
-    ws3.cell(row=row_excel, column=1, value=ds).font = Font(bold=True, size=10, color=COLOR_WHITE, name='Calibri')
-    ws3.cell(row=row_excel, column=1).fill = PatternFill('solid', fgColor=colores['header'])
-    ws3.cell(row=row_excel, column=1).alignment = Alignment(horizontal='center', vertical='center')
-    ws3.cell(row=row_excel, column=1).border = border_thin
-
-    ws3.cell(row=row_excel, column=2, value=best_row['Algoritmo'])
-    ws3.cell(row=row_excel, column=2).font = Font(bold=True, size=10, name='Calibri')
-    ws3.cell(row=row_excel, column=2).fill = PatternFill('solid', fgColor=colores['sub'])
-    ws3.cell(row=row_excel, column=2).alignment = Alignment(horizontal='center', vertical='center')
-    ws3.cell(row=row_excel, column=2).border = border_thin
-
-    for col_idx, metrica in enumerate(METRICAS, start=3):
-        val = best_row[metrica]
-        cell = ws3.cell(row=row_excel, column=col_idx, value=val)
-        cell.fill = PatternFill('solid', fgColor=colores['alt'])
-        cell.font = Font(bold=True, size=10, name='Calibri', color='1B5E20' if isinstance(val, float) and val >= 0.9 else '212121')
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-        cell.border = border_thin
-        if isinstance(val, float):
-            cell.number_format = '0.0000'
-
-    ws3.row_dimensions[row_excel].height = 22
-
-col_widths3 = [20, 22] + [11]*7
-for i, w in enumerate(col_widths3, start=1):
-    ws3.column_dimensions[get_column_letter(i)].width = w
-
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # GUARDAR
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 output_path = os.path.join(_DIR, 'comparativa_algoritmos.xlsx')
 wb.save(output_path)
 
 print(f"\n[OK] Archivo Excel generado exitosamente:")
 print(f"   {output_path}")
-print(f"\nContenido del Excel:")
-print(f"  [Hoja 1] 'Comparativa Completa'  -- {len(resultados)} filas (3 datasets x 4 algoritmos)")
-print(f"  [Hoja 2] 'Resumen por Algoritmo' -- promedio de metricas agrupado por algoritmo")
-print(f"  [Hoja 3] 'Resumen por Dataset'   -- mejor algoritmo por dataset")
-print(f"\nMetricas evaluadas: Accuracy, Recall, Precision, Specificity, F1 Score, AUC, R2")
+print(f"\nHojas del Excel:")
+for ds in resultados_por_dataset:
+    print(f"  - '{ds}' (tabla + grafico de barras + grafico de radar)")
+print(f"  - 'Resumen General' (todos los datasets juntos)")
+print(f"\nMetricas: Accuracy, Precision, Recall (Sensibilidad), Specificity, F1-Score, AUC")
+print(f"Optimizacion: GridSearchCV con cv=5")
