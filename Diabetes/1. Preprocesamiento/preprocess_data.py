@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
 print("--- 1. LECTURA DE DATOS ---")
-path = './Diabetes-Data' 
+path = r'C:\Users\SUPERTRONICA\Documents\GitHub\IA-DATASETS\Diabetes\Dataset'
 all_files = glob.glob(os.path.join(path, "data-*"))
 
 list_df = []

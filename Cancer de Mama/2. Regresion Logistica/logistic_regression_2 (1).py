@@ -39,7 +39,7 @@ X_test = scaler.transform(X_test) # usa los parámetros (media y desv. estandar)
 # Crea y entrena el modelo de regresión logistica
 # multi_class controla cómo se manejan los problemas de clasificación con más de dos clases.
 # solver puede ser 'lbfgs', 'liblinear', 'saga'
-model = LogisticRegression(multi_class='auto', solver='saga', max_iter=100)
+model = LogisticRegression(solver='saga', max_iter=100)
 model.fit(X_train, y_train) # 80%
 
 # Imprime los coeficientes y el intercepto del modelo entrenado
